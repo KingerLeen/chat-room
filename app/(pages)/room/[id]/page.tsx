@@ -14,6 +14,11 @@ const configuration: RTCConfiguration = {
   ],
   bundlePolicy: "max-bundle",
   rtcpMuxPolicy: "require",
+  // 添加编解码器偏好
+  sdpSemantics: "unified-plan",
+  codecs: {
+    video: ["VP8", "H264", "VP9"],
+  },
 };
 
 type PeerConnectionMap = {
@@ -54,6 +59,9 @@ export default function VideoChatRoom() {
         return;
       }
       localStreamRef.current?.getTracks().forEach((track) => {
+        // 强制轨道保持活动状态
+        track.enabled = true;
+
         // 检查是否已添加过该轨道
         const senderExists = pc
           .getSenders()
@@ -65,7 +73,6 @@ export default function VideoChatRoom() {
               streams: [localStreamRef.current],
               sendEncodings: [{ maxBitrate: 500000 }], // 500kbps
             });
-
             pc.addTrack(track, localStreamRef.current);
             console.log("添加轨道 to PC:", pc);
           }
@@ -77,6 +84,7 @@ export default function VideoChatRoom() {
       });
     });
   };
+
   useEffect(() => {
     localStreamRef.current = localStream;
     if (localStream) {
@@ -206,10 +214,18 @@ export default function VideoChatRoom() {
     pc.ontrack = (event) => {
       console.log("收到远程媒体流", event);
       if (event.streams && event.streams.length > 0) {
+        const stream = event.streams[0];
+        // 监控视频轨道状态
+        stream.getVideoTracks().forEach((track) => {
+          track.onmute = () => console.log("Video track muted");
+          track.onunmute = () => console.log("Video track unmuted");
+          track.enabled = true; // 强制启用轨道
+        });
+
         // 更新 UI 显示远程视频流
         setPeerStreams((prev) => ({
           ...prev,
-          [_peerId]: event.streams[0],
+          [_peerId]: stream,
         }));
       }
     };
@@ -561,14 +577,20 @@ export default function VideoChatRoom() {
                   remoteVideosRef.current[peerId] = el;
                   if (el && stream) {
                     el.srcObject = stream;
+                    // 确保视频播放
+                    el.play().catch((e) => console.log("Video play error:", e));
                   }
                 }}
                 autoPlay
                 playsInline
                 className="w-full h-48 bg-black"
                 onCanPlay={() => {
-                  if (remoteVideosRef.current[peerId]) {
-                    remoteVideosRef.current[peerId]!.srcObject = stream;
+                  const video = remoteVideosRef.current[peerId];
+                  if (video && stream) {
+                    video.srcObject = stream;
+                    video
+                      .play()
+                      .catch((e) => console.log("Video play error:", e));
                   }
                 }}
               />
