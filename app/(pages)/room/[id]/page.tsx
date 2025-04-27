@@ -27,6 +27,8 @@ export default function VideoChatRoom() {
   const [input, setInput] = useState("");
   const [userName, setUserName] = useState<string>(generateUUID());
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+
   const [peerStreams, setPeerStreams] = useState<PeerStreamMap>({});
   const [peerId, setPeerId] = useState(generateUUID());
   const [peers, setPeers] = useState<string[]>([]);
@@ -38,6 +40,41 @@ export default function VideoChatRoom() {
   );
   const wsRef = useRef<WebSocket | null>(null);
   const peerConnectionsRef = useRef<PeerConnectionMap>({});
+
+  const addStream = () => {
+    if (!localStreamRef.current) {
+      console.log("无法添加轨道，本地视频流不可用");
+      return;
+    }
+    Object.values(peerConnectionsRef.current).forEach((pc) => {
+      if (pc.iceConnectionState !== "connected") {
+        console.warn("无法添加轨道，webrtc未就绪", pc);
+        return;
+      }
+      localStreamRef.current?.getTracks().forEach((track) => {
+        // 检查是否已添加过该轨道
+        const senderExists = pc
+          .getSenders()
+          .some((sender) => sender.track && sender.track.id === track.id);
+        if (!senderExists && localStreamRef.current) {
+          if (track.kind === "video") {
+            pc.addTrack(track, localStreamRef.current);
+            console.log("添加轨道 to PC:", pc);
+          }
+          if (track.kind === "audio") {
+            pc.addTrack(track, localStreamRef.current);
+            console.log("添加轨道 to PC:", pc);
+          }
+        }
+      });
+    });
+  };
+  useEffect(() => {
+    localStreamRef.current = localStream;
+    if (localStream) {
+      addStream();
+    }
+  }, [localStream]);
 
   // 初始化本地视频流
   const startLocalStream = async () => {
@@ -54,16 +91,17 @@ export default function VideoChatRoom() {
       // 先创建所有peer连接
       peers.forEach((id) => {
         if (id !== peerId) {
-          createPeerConnection(id);
+          const pc = createPeerConnection(id);
+          sendOffer(pc, id);
         }
       });
 
       // 最后再通知其他用户
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
-          JSON.stringify({ type: "stream-ready", userId: peerId })
-        );
-      }
+      // if (wsRef.current?.readyState === WebSocket.OPEN) {
+      //   wsRef.current.send(
+      //     JSON.stringify({ type: "stream-ready", userId: peerId })
+      //   );
+      // }
     } catch (err) {
       console.error("Error accessing media devices:", err);
     }
@@ -86,6 +124,7 @@ export default function VideoChatRoom() {
     // }
     if (peerConnectionsRef.current[_peerId]) {
       console.log(`Connection to ${_peerId} already exists`);
+      addStream();
       return;
     }
 
@@ -93,13 +132,15 @@ export default function VideoChatRoom() {
     peerConnectionsRef.current[_peerId] = pc;
     console.log(`Creating peer connection to ${_peerId}`, pc);
 
-    // 添加本地轨道
-    localStream?.getTracks().forEach((track) => {
-      pc.addTrack(track, localStream);
-    });
-
     pc.onicecandidate = (event) => {
+      // console.log(`ICE Candidate for ${_peerId}:`, event.candidate);
       if (event.candidate && wsRef.current?.readyState === WebSocket.OPEN) {
+        // console.log("Candidate details:", {
+        //   ip: event.candidate.address,
+        //   port: event.candidate.port,
+        //   type: event.candidate.type,
+        //   protocol: event.candidate.protocol,
+        // });
         wsRef.current.send(
           JSON.stringify({
             type: "candidate",
@@ -110,16 +151,57 @@ export default function VideoChatRoom() {
       }
     };
 
-    pc.ontrack = (event) => {
-      setPeerStreams((prev) => ({
-        ...prev,
-        [_peerId]: event.streams[0],
-      }));
+    pc.oniceconnectionstatechange = () => {
+      console.log(`ICE connection state changed to: ${pc.iceConnectionState}`);
+      if (pc.iceConnectionState === "connected") {
+        // 连接成功建立
+        console.log("WebRTC 连接成功!");
+        addStream();
+      } else if (pc.iceConnectionState === "failed") {
+        // 连接失败，可能需要重新协商
+        console.error("ICE 连接失败");
+      }
     };
 
+    pc.onnegotiationneeded = async () => {
+      sendOffer(pc, _peerId);
+    };
+
+    // 或者添加数据通道（如果没有媒体）
+    const dataChannel = pc.createDataChannel("test");
+    dataChannel.onopen = () => console.log("Data channel opened");
+    dataChannel.onmessage = (event) => {
+      console.log("Received Data channel message:", event.data);
+    };
+    setTimeout(() => {
+      dataChannel.send("Send Data channel message");
+    }, 5000);
+
+    pc.ontrack = (event) => {
+      console.log("收到远程媒体流", event);
+      if (event.streams && event.streams.length > 0) {
+        // 更新 UI 显示远程视频流
+        setPeerStreams((prev) => ({
+          ...prev,
+          [_peerId]: event.streams[0],
+        }));
+      }
+    };
+
+    return pc;
+  };
+
+  const sendOffer = async (pc, _peerId) => {
     // 创建 offer
     pc.createOffer()
-      .then((offer) => pc.setLocalDescription(offer))
+      .then(async (offer) => {
+        try {
+          await pc.setLocalDescription(offer);
+          console.log("Local description set, state:", pc.iceGatheringState); // 应为 "gathering"
+        } catch (err) {
+          console.error("setLocalDescription failed:", err);
+        }
+      })
       .then(() => {
         if (
           wsRef.current?.readyState === WebSocket.OPEN &&
@@ -136,7 +218,6 @@ export default function VideoChatRoom() {
         }
       })
       .catch(console.error);
-    return pc;
   };
 
   // 处理收到的offer
@@ -149,41 +230,22 @@ export default function VideoChatRoom() {
       console.log("自己不能处理自己的offer");
       return;
     }
+
+    createPeerConnection(_peerId);
+
     let pc = peerConnectionsRef.current[_peerId];
-    if (!pc) {
-      pc = new RTCPeerConnection(configuration);
-      peerConnectionsRef.current[_peerId] = pc;
-      console.log(`Creating peer connection to ${_peerId}`, pc);
-    }
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate && wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(
-          JSON.stringify({
-            type: "candidate",
-            userId: _peerId,
-            candidate: event.candidate,
-          })
-        );
-      }
-    };
-
-    pc.ontrack = (event) => {
-      setPeerStreams((prev) => ({
-        ...prev,
-        [_peerId]: event.streams[0],
-      }));
-    };
-
-    localStream?.getTracks().forEach((track) => {
-      pc.addTrack(track, localStream);
-    });
 
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
     const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
+    try {
+      await pc.setLocalDescription(answer);
+      console.log("Local description set, state:", pc.iceGatheringState); // 应为 "gathering"
+    } catch (err) {
+      console.error("setLocalDescription failed:", err);
+    }
 
     if (wsRef.current?.readyState === WebSocket.OPEN) {
+      console.log("Sending answer", { _peerId });
       wsRef.current.send(
         JSON.stringify({
           type: "answer",
@@ -199,13 +261,53 @@ export default function VideoChatRoom() {
     _peerId: string,
     answer: RTCSessionDescriptionInit
   ) => {
-    const pc = peerConnectionsRef.current[_peerId];
+    let pc = peerConnectionsRef.current[_peerId];
+
     if (!pc) {
-      console.error("No peer connection for answer");
+      console.error("handleAnswer No peer connection for answer");
       return;
     }
-    await pc.setRemoteDescription(new RTCSessionDescription(answer));
+    // 检查当前状态
+    console.log("handleAnswer 当前连接状态：", pc.signalingState);
+
+    // 只有在 have-local-offer 状态下才能设置远程 answer
+    if (pc.signalingState !== "have-local-offer") {
+      console.log(`handleAnswer 错误状态: ${pc.signalingState}`);
+      return;
+    }
+
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      return true;
+    } catch (err) {
+      console.error("Error setting remote description:", err);
+    }
   };
+  // const handleAnswerWithRetry = async (
+  //   _peerId: string,
+  //   answer: RTCSessionDescriptionInit,
+  //   retries = 3
+  // ) => {
+  //   const retryFunc = ({ err }) => {
+  //     if (retries > 0) {
+  //       console.log(`Retrying answer handling (${retries} left)...`);
+  //       setTimeout(() => {
+  //         handleAnswerWithRetry(_peerId, answer, retries - 1);
+  //       }, 500);
+  //     } else {
+  //       console.error("Failed to handle answer after retries:", err);
+  //     }
+  //   };
+
+  //   try {
+  //     const isDone = await handleAnswer(_peerId, answer);
+  //     if (!isDone) {
+  //       retryFunc({ err: "" });
+  //     }
+  //   } catch (err) {
+  //     retryFunc({ err });
+  //   }
+  // };
 
   // 处理收到的ICE candidate
   const handleCandidate = async (
@@ -217,7 +319,13 @@ export default function VideoChatRoom() {
       console.error("No peer connection for candidate");
       return;
     }
-    await pc.addIceCandidate(new RTCIceCandidate(candidate));
+    try {
+      // console.log("Adding ICE candidate:", candidate); // 调试日志
+      await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      console.log("Successfully added ICE candidate"); // 调试日志
+    } catch (err) {
+      console.error("Error adding ICE candidate:", err);
+    }
   };
 
   // 移除peer连接
@@ -285,9 +393,9 @@ export default function VideoChatRoom() {
           message.info(`${data.userId} 离开了聊天室`);
         } else if (data.type === "stream-ready") {
           // 只有当本地有流时才创建连接
-          console.log("stream-ready", data);
+          // console.log("stream-ready", data);
           // if (localStream) {
-          createPeerConnection(data.userId);
+          // createPeerConnection(data.userId, false);
           // }
         }
         // 处理WebRTC信令
@@ -295,9 +403,10 @@ export default function VideoChatRoom() {
           console.log("收到offer", data);
           await handleOffer(data.senderId, data.offer);
         } else if (data.type === "answer") {
-          await handleAnswer(data.userId, data.answer);
+          console.log("收到answer", data);
+          await handleAnswer(data.senderId, data.answer);
         } else if (data.type === "candidate") {
-          await handleCandidate(data.userId, data.candidate);
+          await handleCandidate(data.senderId, data.candidate);
         }
       };
 
@@ -337,10 +446,30 @@ export default function VideoChatRoom() {
     };
   }, []);
 
+  // Object.values(peerConnectionsRef.current).forEach((pc) => {
+  //   console.log("ICE Gathering State:", pc.iceGatheringState);
+  // });
   console.log("peerStreams", peerStreams);
-  console.log("peers", peers);
-  console.log("peerConnectionsRef", peerConnectionsRef.current);
-  console.log("remoteVideosRef", remoteVideosRef.current);
+  // console.log("peers", peers);
+  // console.log("peerConnectionsRef", peerConnectionsRef.current);
+  // console.log("remoteVideosRef", remoteVideosRef.current);
+  // console.log("localStream", localStream);
+
+  const refreshStream = () => {
+    // 更新远程视频流
+    if (localVideoRef.current && localStream) {
+      localVideoRef.current.srcObject = localStream;
+    }
+    // 更新远程视频流
+    peers.forEach((id) => {
+      if (remoteVideosRef.current[id]) {
+        remoteVideosRef.current[id]!.srcObject = peerStreams[id];
+      }
+    });
+  };
+  useEffect(() => {
+    refreshStream();
+  }, [localStream, peers, peerStreams]);
 
   return (
     <div className="max-w-4xl mx-auto p-4">

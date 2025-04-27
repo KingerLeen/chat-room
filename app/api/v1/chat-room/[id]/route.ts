@@ -1,10 +1,6 @@
 import { rooms } from "../route";
 
-
-export async function DELETE(
-  request: Request,
-  { params }: { params: { id: string } }
-) {
+export async function DELETE(request: Request, { params }) {
   const { id } = params; // 直接获取动态路由参数
   const index = rooms.findIndex((room) => room.id == id);
   console.log("Deleting room with ID:", id);
