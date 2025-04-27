@@ -1,6 +1,11 @@
 {
   "private": true,
   "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "scripts2": {
     "dev": "node server.js",
     "build": "next build",
     "start": "NODE_ENV=production node server.js"
@@ -9,6 +14,8 @@
     "@ant-design/nextjs-registry": "^1.0.2",
     "@ant-design/v5-patch-for-react-19": "^1.0.3",
     "antd": "^5.24.8",
+    "bufferutil": "^4.0.9",
+    "js-base64": "^3.7.7",
     "next": "latest",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

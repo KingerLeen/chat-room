@@ -6,3 +6,4 @@ services:
     image: with-docker-multi-env-production
     ports:
       - "3003:3000"
+      - "333:333"
