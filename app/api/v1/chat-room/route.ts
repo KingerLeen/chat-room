@@ -1,14 +1,6 @@
 import { randomUUID } from "crypto";
 import { WebSocketServer } from "ws";
-
-export const rooms = [
-  {
-    id: "root",
-    name: "大厅",
-    canDelete: false,
-    description: "这是一个公共聊天室",
-  },
-];
+import { rooms } from "./content";
 
 export async function GET(request: Request) {
   return new Response(JSON.stringify({ code: 0, message: null, data: rooms }), {
@@ -18,7 +10,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const { name, description } = await request.json();
-  const newRoom = {
+  const newRoom: any = {
     id: randomUUID(),
     name,
     canDelete: true,

@@ -22,7 +22,7 @@ function broadcast(message: any, excludeUserId?: string) {
 
 if (!wss) {
   wss = new WebSocketServer({
-    port: 333,
+    port: 3100,
     maxPayload: 1024 * 1024 * 1, // 10MB (默认是 16KB)
     // perMessageDeflate: {
     //   zlibDeflateOptions: {

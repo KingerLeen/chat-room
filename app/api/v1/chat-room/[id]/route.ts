@@ -1,4 +1,4 @@
-import { rooms } from "../route";
+import { rooms } from "../content";
 
 export async function DELETE(request: Request, { params }) {
   const { id } = params; // 直接获取动态路由参数

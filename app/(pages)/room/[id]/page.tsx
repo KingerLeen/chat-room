@@ -4,7 +4,7 @@ import { Button, Input, message } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { generateUUID } from "../../../utils/uuid";
 
-const configuration = {
+const configuration: RTCConfiguration = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
@@ -12,6 +12,8 @@ const configuration = {
     { urls: "stun:stun.voipbuster.com" },
     { urls: "stun:stun.sipgate.net" },
   ],
+  bundlePolicy: "max-bundle",
+  rtcpMuxPolicy: "require",
 };
 
 type PeerConnectionMap = {
@@ -58,6 +60,12 @@ export default function VideoChatRoom() {
           .some((sender) => sender.track && sender.track.id === track.id);
         if (!senderExists && localStreamRef.current) {
           if (track.kind === "video") {
+            pc.addTransceiver("video", {
+              direction: "sendonly",
+              streams: [localStreamRef.current],
+              sendEncodings: [{ maxBitrate: 500000 }], // 500kbps
+            });
+
             pc.addTrack(track, localStreamRef.current);
             console.log("添加轨道 to PC:", pc);
           }
@@ -79,13 +87,31 @@ export default function VideoChatRoom() {
   // 初始化本地视频流
   const startLocalStream = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
-      });
-      setLocalStream(stream);
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        message.error("您的浏览器不支持媒体设备访问");
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true,
+        });
+
+        setLocalStream(stream);
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = stream;
+        }
+
+        // 成功处理
+      } catch (err) {
+        // 常见错误处理
+        if (err.name === "NotAllowedError") {
+          alert("请允许摄像头和麦克风权限");
+        } else if (err.name === "NotFoundError") {
+          alert("未找到可用的媒体设备");
+        } else {
+          alert(`无法访问媒体设备: ${err.message}`);
+        }
       }
 
       // 先创建所有peer连接
@@ -362,7 +388,7 @@ export default function VideoChatRoom() {
       await fetch("/api/v1/ws");
 
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const wsUrl = `${protocol}//localhost:333`;
+      const wsUrl = `${protocol}//${location.host.split(":")[0]}:3100`;
 
       // const peerId = ;
       // setPeerId(peerId);
